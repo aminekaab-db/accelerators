@@ -9,12 +9,10 @@ schema_path = dbutils.widgets.get('schema_path')
 # COMMAND ----------
 
 def random_choice(choices):
-  mean_index = len(choices) / 2
-  std_dev = len(choices) / 6
-  weights = [random.gauss(mean_index, std_dev) for _ in range(len(choices))]
-  total = sum(weights)
-  p_weights = [w / total for w in weights]
-  return random.choices(choices, p_weights)[0]
+  mean_index = len(choices) / 4
+  std_dev = len(choices) / 4
+  weights = [math.ceil(random.lognormvariate(mean_index, std_dev)) for _ in range(len(choices))]
+  return random.choices(choices, weights)[0]
 
 # COMMAND ----------
 
@@ -28,10 +26,30 @@ departments = [
     "Information Technology", "Research and Development", "Product Management", "Legal"
 ]
 
+devices = [
+   "Mobile", "Desktop", "Tablet", "Smart TV", "Gaming Console", "Laptop", "E-reader"
+]
+
 countries = [fake.country_code() for _ in range(5)]
 cities = [fake.city() for _ in range(5)]
 postcodes = [fake.postcode() for _ in range(5)]
 
+
+# COMMAND ----------
+
+choices = industries
+mean_index = len(choices)
+std_dev = len(choices) / 2
+weights = [random.lognormvariate(mean_index, std_dev) for _ in range(len(choices))]
+weights
+
+# COMMAND ----------
+
+choices = ["referral", "web", "market", "event"]
+mean_index = len(choices) / 4
+std_dev = len(choices) / 4
+weights = [math.floor(random.lognormvariate(mean_index, std_dev)) for _ in range(len(choices))]
+weights
 
 # COMMAND ----------
 
@@ -69,6 +87,7 @@ for prospect in prospects:
             'department': random_choice(departments),
             'job_title': fake.job(),
             'source': random_choice(["referral", "web", "market", "event"]),
+            'device': random_choice(devices),
             'opted_out': False,
         })
 
@@ -90,6 +109,8 @@ for i in range(n_compaigns):
         'compaign_id': 100 + i,
         'campaign_name': fake.sentence(nb_words=4),
         'compaign_description': fake.sentence(nb_words=50),
+        'subject_line': fake.sentence(nb_words=10),
+        'template': fake.sentence(nb_words=1),
         'cost': round(k * 4.2, 2),
         'start_date': start_date, 
         'end_date': end_date,
@@ -159,7 +180,7 @@ def generate_events(compaigns_list):
                             else:
                                 clicked = random.choices([True, False], weights=[30, 70])[0]
                                 if clicked:
-                                    e = Event(compaign_id, contact, current_date, time(random.randint(1, 23), random.randint(0, 55)), 'click', {'target': random.choice(click_targets)})
+                                    e = Event(compaign_id, contact, current_date, time(random.randint(1, 23), random.randint(0, 55)), 'click', {'target': random_choice(click_targets), 'cta': random_choice(['text', 'link', 'image', 'video', 'button'])})
                                     add_event(events, e)
             current_date += timedelta(days=1)
     return events
@@ -172,7 +193,71 @@ display(events_df)
 
 # COMMAND ----------
 
-compaigns_df.write.mode("overwrite").saveAsTable(f"{schema_path}.compaigns")
-contacts_df.write.mode("overwrite").saveAsTable(f"{schema_path}.contacts")
-prospects_df.write.mode("overwrite").saveAsTable(f"{schema_path}.prospects")
-events_df.write.mode("overwrite").saveAsTable(f"{schema_path}.compaign_events")
+def generate_feedback():
+    params = {"temperature": 0.9, "max_tokens": 256}
+    try:
+        headers = {"Authorization": f"Bearer {databricks_token}"}
+        url = f"{host}/serving-endpoints/databricks-dbrx-instruct/invocations"
+        
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "generate one feedback about a product  or offering that is neutral, good, or bad. give only the feedback without the sentiment."
+                }
+            ],
+            **params
+        }
+        
+        response = requests.post(url, headers=headers, json=data)
+        return json.loads(response.text)['choices'].pop()['message']['content']
+    except:
+        return ''
+
+# COMMAND ----------
+
+contacts = [row['contact_id'] for row in contacts_df.select('contact_id').collect()]
+
+n_compaigns = 15
+rows = []
+
+for i in range(n_compaigns):
+    rows.append({
+        'compaign_id': 100 + i,
+        'feedbacks': generate_feedback(),
+        'contact_id': random.choice(contacts),
+    })
+
+feedbacks_df = spark.createDataFrame(pd.DataFrame(rows))
+display(feedbacks_df)
+
+# COMMAND ----------
+
+contacts = [row['contact_id'] for row in contacts_df.select('contact_id').collect()]
+
+n_compaigns = 12
+rows = []
+
+for i in range(n_compaigns):
+    rows.append({
+        'compaign_id': 100 + i,
+        'complaint_type': random.choices(["CAN-SPAM Act", "GDPR"], [85, 15]),
+        'contact_id': random.choice(contacts),
+    })
+
+issues_df = spark.createDataFrame(pd.DataFrame(rows))
+display(issues_df)
+
+# COMMAND ----------
+
+compaigns_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.compaigns")
+contacts_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.contacts")
+prospects_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.prospects")
+events_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.compaign_events")
+feedbacks_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.feedbacks")
+issues_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.issues")
+
+
+# COMMAND ----------
+
+

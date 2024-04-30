@@ -9,7 +9,7 @@ schema_path = dbutils.widgets.get('schema_path')
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE OR REPLACE VIEW $schema_path.daily_stats AS
+# MAGIC CREATE OR REPLACE VIEW $schema_path.metrics_daily AS
 # MAGIC SELECT 
 # MAGIC     DATE(event_date) AS day,
 # MAGIC     compaign_id,
@@ -33,7 +33,7 @@ schema_path = dbutils.widgets.get('schema_path')
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE OR REPLACE VIEW $schema_path.rolling_metrics_daily AS
+# MAGIC CREATE OR REPLACE VIEW $schema_path.metrics_daily_rolling AS
 # MAGIC
 # MAGIC WITH event_rankings AS (
 # MAGIC     SELECT 
@@ -74,19 +74,22 @@ schema_path = dbutils.widgets.get('schema_path')
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE OR REPLACE VIEW $schema_path.agg_metrics as
 # MAGIC SELECT 
-# MAGIC     
-# MAGIC     SUM(CASE WHEN event_type = 'sent' THEN 1 ELSE 0 END) AS total_sent,
-# MAGIC     SUM(CASE WHEN event_type = 'delivered' THEN 1 ELSE 0 END) AS total_delivered,
-# MAGIC     SUM(CASE WHEN event_type = 'spam' THEN 1 ELSE 0 END) AS total_spam,
-# MAGIC     SUM(CASE WHEN event_type = 'html_open' THEN 1 ELSE 0 END) AS total_opens,
-# MAGIC     SUM(CASE WHEN event_type = 'optout_click' THEN 1 ELSE 0 END) AS total_optouts,
-# MAGIC     SUM(CASE WHEN event_type = 'click' THEN 1 ELSE 0 END) AS total_clicks,
-# MAGIC     count(distinct case when event_type = 'click' then contact_id end) as unique_clicks,
-# MAGIC     format_number(unique_clicks / total_delivered, '##.##%') as ctr,
-# MAGIC     format_number(total_delivered / total_sent, '##.##%') as delivery_rate,
-# MAGIC     format_number(total_optouts / total_delivered, '##.##%') as optouts_rate,
-# MAGIC     format_number(total_spam / total_delivered, '##.##%') as spam_rate
+# MAGIC     e.compaign_id,
+# MAGIC     explode(collect_set(e.metadata.cta)) as cta,
+# MAGIC     first(c.cost) as cost,
+# MAGIC     to_timestamp(first(c.start_date)) as _start_date,
+# MAGIC     to_timestamp(first(c.end_date)) as _end_date,
+# MAGIC     SUM(CASE WHEN e.event_type = 'delivered' THEN 1 ELSE 0 END) AS total_delivered,
+# MAGIC     count(distinct case when e.event_type = 'click' then e.contact_id end) as unique_clicks,
+# MAGIC     unique_clicks / total_delivered as ctr
 # MAGIC FROM 
-# MAGIC     $schema_path.compaign_events
+# MAGIC     main.emailmarketing.compaign_events e
+# MAGIC INNER JOIN main.emailmarketing.compaigns c on e.compaign_id = c.compaign_id
+# MAGIC INNER JOIN main.emailmarketing.contacts ct on e.contact_id = ct.contact_id
+# MAGIC INNER JOIN main.emailmarketing.prospects p on ct.prospect_id = p.prospect_id
+# MAGIC GROUP BY 
+# MAGIC     e.compaign_id
+# MAGIC
+# MAGIC ORDER BY ctr desc, cost ASC
+# MAGIC LIMIT 20
