@@ -23,3 +23,7 @@ fake = Faker()
 dbutils_sp = dbutils.notebook.entry_point.getDbutils()
 host = dbutils_sp.notebook().getContext().apiUrl().getOrElse(None)
 databricks_token = dbutils_sp.notebook().getContext().apiToken().getOrElse(None)
+
+# COMMAND ----------
+
+

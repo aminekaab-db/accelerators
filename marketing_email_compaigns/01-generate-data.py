@@ -9,10 +9,10 @@ schema_path = dbutils.widgets.get('schema_path')
 # COMMAND ----------
 
 def random_choice(choices):
-  mean_index = len(choices) / 4
-  std_dev = len(choices) / 4
-  weights = [math.ceil(random.lognormvariate(mean_index, std_dev)) for _ in range(len(choices))]
-  return random.choices(choices, weights)[0]
+  raw_weights = np.random.default_rng().standard_cauchy(len(choices))
+  non_negative_weights = np.abs(raw_weights)
+  # weights = non_negative_weights / np.sum(non_negative_weights)
+  return random.choices(choices, non_negative_weights, k=1)[0]
 
 # COMMAND ----------
 
@@ -34,22 +34,6 @@ countries = [fake.country_code() for _ in range(5)]
 cities = [fake.city() for _ in range(5)]
 postcodes = [fake.postcode() for _ in range(5)]
 
-
-# COMMAND ----------
-
-choices = industries
-mean_index = len(choices)
-std_dev = len(choices) / 2
-weights = [random.lognormvariate(mean_index, std_dev) for _ in range(len(choices))]
-weights
-
-# COMMAND ----------
-
-choices = ["referral", "web", "market", "event"]
-mean_index = len(choices) / 4
-std_dev = len(choices) / 4
-weights = [math.floor(random.lognormvariate(mean_index, std_dev)) for _ in range(len(choices))]
-weights
 
 # COMMAND ----------
 
@@ -110,7 +94,7 @@ for i in range(n_compaigns):
         'campaign_name': fake.sentence(nb_words=4),
         'compaign_description': fake.sentence(nb_words=50),
         'subject_line': fake.sentence(nb_words=10),
-        'template': fake.sentence(nb_words=1),
+        'template': random.choice([f'Template {i}' for i in range(20)]),
         'cost': round(k * 4.2, 2),
         'start_date': start_date, 
         'end_date': end_date,
@@ -218,10 +202,10 @@ def generate_feedback():
 
 contacts = [row['contact_id'] for row in contacts_df.select('contact_id').collect()]
 
-n_compaigns = 15
+n_feedbacks = 15
 rows = []
 
-for i in range(n_compaigns):
+for i in range(n_feedbacks):
     rows.append({
         'compaign_id': 100 + i,
         'feedbacks': generate_feedback(),
@@ -235,13 +219,13 @@ display(feedbacks_df)
 
 contacts = [row['contact_id'] for row in contacts_df.select('contact_id').collect()]
 
-n_compaigns = 12
+n_issues = 12
 rows = []
 
-for i in range(n_compaigns):
+for i in range(n_issues):
     rows.append({
-        'compaign_id': 100 + i,
-        'complaint_type': random.choices(["CAN-SPAM Act", "GDPR"], [85, 15]),
+        'compaign_id': random_choice([100, 102, 105]),
+        'complaint_type': random.choices(["CAN-SPAM Act", "GDPR", "Other"], [70, 15, 15]),
         'contact_id': random.choice(contacts),
     })
 
@@ -250,13 +234,98 @@ display(issues_df)
 
 # COMMAND ----------
 
-compaigns_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.compaigns")
-contacts_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.contacts")
-prospects_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.prospects")
-events_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.compaign_events")
-feedbacks_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.feedbacks")
-issues_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{schema_path}.issues")
+def persist_table(df, table_name, schema, comment):
+  spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+  empty_df = spark.createDataFrame(df.toPandas(), schema=schema)
+  empty_df.write.mode("overwrite").option("mergeSchema", "true").saveAsTable(table_name)
+  spark.sql(f"COMMENT ON TABLE {table_name} IS '{comment}'")
+  display(spark.sql(f"DESCRIBE TABLE {table_name}"))
 
+# COMMAND ----------
+
+table_name = f"{schema_path}.feedbacks"
+table_comment = "Feedbacks collected during email campaigns"
+schema= "compaign_id LONG COMMENT 'ID of the campaign', feedbacks STRING COMMENT 'Feedbacks received from the contact', contact_id LONG COMMENT 'ID of the contact submitting the feedback'"
+persist_table(feedbacks_df, table_name, schema, table_comment)
+
+# COMMAND ----------
+
+table_name = f"{schema_path}.issues"
+table_comment = "Contains issues reported during email campaigns"
+schema= "compaign_id LONG COMMENT 'ID of the campaign', complaint_type ARRAY<STRING> COMMENT 'Complaint types (GDPR, CAN-SPAM Act, etc)', contact_id LONG COMMENT 'ID of the contact submitting the issue'"
+persist_table(issues_df, table_name, schema, table_comment)
+
+# COMMAND ----------
+
+table_name = f"{schema_path}.compaigns"
+table_comment = "Details of marketing campaigns including names, descriptions, and costs"
+schema= "compaign_id LONG COMMENT 'Unique identifier for each campaign', campaign_name STRING COMMENT 'Name of the campaign', compaign_description STRING COMMENT 'Description of the campaign', subject_line STRING COMMENT 'Subject line used in the campaign emails', template STRING COMMENT 'Email template used for the campaign', cost DOUBLE COMMENT 'Total cost of the campaign', start_date DATE COMMENT 'Start date of the campaign', end_date DATE COMMENT 'End date of the campaign', mailing_list ARRAY<LONG> COMMENT 'List of contact IDs targeted in the campaign'"
+persist_table(compaigns_df, table_name, schema, table_comment)
+
+# COMMAND ----------
+
+table_name = f"{schema_path}.contacts"
+table_comment = "Contains detailed contact information for potential clients"
+schema= "contact_id LONG COMMENT 'The unique ID for each contact', prospect_id LONG COMMENT 'The ID linking the contact to a specific prospect', department STRING COMMENT 'The department where the contact is employed', job_title STRING COMMENT 'The official job title of the contact', source STRING COMMENT 'The origin source of the contact information', device STRING COMMENT 'The primary device type used by the contact for communication',  opted_out BOOLEAN COMMENT 'Flag indicating if the contact has opted out of marketing communications'"
+persist_table(contacts_df, table_name, schema, table_comment)
+
+# COMMAND ----------
+
+table_name = f"{schema_path}.prospects"
+table_comment = "Stores information about potential business prospects"
+schema= "prospect_id LONG COMMENT 'Unique identifier for each prospect', name STRING COMMENT 'Name of the prospect or company', annual_revenue DOUBLE COMMENT 'Reported annual revenue of the prospect in Million USD', employees LONG COMMENT 'Number of employees working for the prospect', industry STRING COMMENT 'Industry sector the prospect operates in', country STRING COMMENT 'Country where the prospect is located', city STRING COMMENT 'City where the prospect is located', postcode STRING COMMENT 'Postal code for the prospects location'"
+persist_table(prospects_df, table_name, schema, table_comment)
+
+# COMMAND ----------
+
+table_name = f"{schema_path}.events"
+table_comment = "Records all events related to marketing campaigns"
+schema= "event_id STRING COMMENT 'Unique identifier for the event', compaign_id LONG COMMENT 'Identifier for the campaign associated with this event', contact_id LONG COMMENT 'Identifier for the contact involved in this event', event_type STRING COMMENT 'Type of event (e.g., html_open, click)', event_date TIMESTAMP COMMENT 'Timestamp when the event occurred', metadata MAP<STRING, STRING> COMMENT 'Additional information about the event in key-value pairs'"
+persist_table(events_df, table_name, schema, table_comment)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE VIEW $schema_path.metrics_daily_rolling 
+# MAGIC (date COMMENT 'The day of the event', unique_clicks COMMENT 'The number of unique clicks per campaign', total_delivered COMMENT 'The total number of emails successfully delivered', total_sent COMMENT 'The total number of emails sent', total_opens COMMENT 'The total number of emails opened', total_clicks COMMENT 'The total number of clicks', total_optouts COMMENT 'The total number of opt-outs', total_spam COMMENT 'The total number of emails marked as spam')
+# MAGIC     COMMENT 'A view aggregating daily metrics for email campaigns, including unique clicks and various totals'
+# MAGIC      AS
+# MAGIC
+# MAGIC WITH event_rankings AS (
+# MAGIC     SELECT 
+# MAGIC         e.*, 
+# MAGIC         ROW_NUMBER() OVER (PARTITION BY event_type, compaign_id, contact_id ORDER BY e.event_date) AS contact_rn 
+# MAGIC     FROM 
+# MAGIC         $schema_path.events e
+# MAGIC ),
+# MAGIC event_with_metrics AS (
+# MAGIC     SELECT 
+# MAGIC         DATE(event_date) AS date,
+# MAGIC         compaign_id,
+# MAGIC         SUM(CASE WHEN event_type = 'sent' THEN 1 ELSE 0 END) AS total_sent,
+# MAGIC         SUM(CASE WHEN event_type = 'click' THEN 1 ELSE 0 END) AS total_clicks,
+# MAGIC         SUM(CASE WHEN event_type = 'delivered' THEN 1 ELSE 0 END) AS total_delivered,
+# MAGIC         SUM(CASE WHEN event_type = 'spam' THEN 1 ELSE 0 END) AS total_spam,
+# MAGIC         SUM(CASE WHEN event_type = 'html_open' THEN 1 ELSE 0 END) AS total_opens,
+# MAGIC         SUM(CASE WHEN event_type = 'optout_click' THEN 1 ELSE 0 END) AS total_optouts,
+# MAGIC         SUM(CASE WHEN event_type = 'click' AND contact_rn = 1 THEN 1 ELSE 0 END) AS unique_clicks
+# MAGIC     FROM 
+# MAGIC         event_rankings
+# MAGIC     GROUP BY 
+# MAGIC         date, 
+# MAGIC         compaign_id
+# MAGIC )
+# MAGIC
+# MAGIC SELECT 
+# MAGIC     date,
+# MAGIC     unique_clicks,
+# MAGIC     total_delivered,
+# MAGIC     total_sent,
+# MAGIC     total_opens,
+# MAGIC     total_clicks,
+# MAGIC     total_optouts,
+# MAGIC     total_spam
+# MAGIC FROM event_with_metrics
 
 # COMMAND ----------
 
