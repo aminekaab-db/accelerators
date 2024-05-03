@@ -3,16 +3,17 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("schema_path", "main.emailmarketing", "Schema Path")
+dbutils.widgets.text("schema_path", "demos_genie.genie_marketing_campaign", "Schema Path")
 schema_path = dbutils.widgets.get('schema_path')
 
 # COMMAND ----------
 
-def random_choice(choices):
-  raw_weights = np.random.default_rng().standard_cauchy(len(choices))
-  non_negative_weights = np.abs(raw_weights)
-  # weights = non_negative_weights / np.sum(non_negative_weights)
-  return random.choices(choices, non_negative_weights, k=1)[0]
+def random_choice(choices, weights = None):
+  if weights == None:
+    raw_weights = np.random.default_rng().normal(loc=0, scale=1, size=len(choices))
+    non_negative_weights = np.abs(raw_weights)
+    weights = non_negative_weights / np.sum(non_negative_weights)
+  return random.choices(choices, weights, k=1)[0]
 
 # COMMAND ----------
 
@@ -70,13 +71,36 @@ for prospect in prospects:
             'prospect_id': prospect_id,
             'department': random_choice(departments),
             'job_title': fake.job(),
-            'source': random_choice(["referral", "web", "market", "event"]),
-            'device': random_choice(devices),
+            'source': random_choice(["referral", "web", "market", "event"], [10, 60, 15, 15]),
+            'device': random_choice(devices, [10, 30, 10, 10, 10, 15, 15]),
             'opted_out': False,
         })
 
 contacts_df = spark.createDataFrame(pd.DataFrame(rows))
 display(contacts_df)
+
+# COMMAND ----------
+
+def generate_subject_line():
+    params = {"temperature": 0.9, "max_tokens": 256}
+    try:
+        headers = {"Authorization": f"Bearer {databricks_token}"}
+        url = f"{host}/serving-endpoints/databricks-dbrx-instruct/invocations"
+        
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "generate one email subject line for a professional email compaign about product or services. give only the subject line."
+                }
+            ],
+            **params
+        }
+        
+        response = requests.post(url, headers=headers, json=data)
+        return json.loads(response.text)['choices'].pop()['message']['content']
+    except:
+        return ''
 
 # COMMAND ----------
 
@@ -93,7 +117,7 @@ for i in range(n_compaigns):
         'compaign_id': 100 + i,
         'campaign_name': fake.sentence(nb_words=4),
         'compaign_description': fake.sentence(nb_words=50),
-        'subject_line': fake.sentence(nb_words=10),
+        'subject_line': generate_subject_line(),
         'template': random.choice([f'Template {i}' for i in range(20)]),
         'cost': round(k * 4.2, 2),
         'start_date': start_date, 
@@ -134,6 +158,7 @@ def generate_events(compaigns_list):
     events = []
     for compaign in compaigns_list:
         click_targets = [fake.url() for _ in range(random.randint(5, 20))]
+        cta = random_choice(['text', 'link', 'image', 'video', 'button'], [10, 10, 10, 60, 10])
         current_date = compaign['start_date']
         end_date = compaign['end_date']
         compaign_id = compaign['compaign_id']
@@ -164,7 +189,7 @@ def generate_events(compaigns_list):
                             else:
                                 clicked = random.choices([True, False], weights=[30, 70])[0]
                                 if clicked:
-                                    e = Event(compaign_id, contact, current_date, time(random.randint(1, 23), random.randint(0, 55)), 'click', {'target': random_choice(click_targets), 'cta': random_choice(['text', 'link', 'image', 'video', 'button'])})
+                                    e = Event(compaign_id, contact, current_date, time(random.randint(1, 23), random.randint(0, 55)), 'click', {'target': random_choice(click_targets), 'cta': cta})
                                     add_event(events, e)
             current_date += timedelta(days=1)
     return events
@@ -219,13 +244,13 @@ display(feedbacks_df)
 
 contacts = [row['contact_id'] for row in contacts_df.select('contact_id').collect()]
 
-n_issues = 12
+n_issues = 24
 rows = []
 
 for i in range(n_issues):
     rows.append({
         'compaign_id': random_choice([100, 102, 105]),
-        'complaint_type': random.choices(["CAN-SPAM Act", "GDPR", "Other"], [70, 15, 15]),
+        'complaint_type': random.choices(["CAN-SPAM Act", "GDPR", "Other"], [60, 25, 15]),
         'contact_id': random.choice(contacts),
     })
 
@@ -326,7 +351,3 @@ persist_table(events_df, table_name, schema, table_comment)
 # MAGIC     total_optouts,
 # MAGIC     total_spam
 # MAGIC FROM event_with_metrics
-
-# COMMAND ----------
-
-
